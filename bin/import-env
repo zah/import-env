@@ -1,0 +1,86 @@
+#!/usr/bin/env ruby
+# import-env -- run an arbitrary shell script, print the env changes as Bash code
+
+require "shellwords"
+require "tempfile"
+
+SUPPORTED_SHELLS = %w[sh bash zsh dash ksh fish].freeze
+
+# ---------- helpers ---------------------------------------------------------
+def quote(val)                       # single-quote for Bash
+  return "''" if val.empty?
+  "'" + val.gsub("'", "'\"'\"'") + "'"
+end
+
+def read_shebang(path)
+  line = File.open(path, "r") { |f| f.readline rescue "" }
+  m = /\A#!\s*(\S+)/.match(line)
+  m ? m[1] : "/bin/sh"
+end
+
+def build_wrapper(interpreter, script, args)
+  scr = File.absolute_path(script)
+  case File.basename(interpreter)
+  when "fish"
+    <<~CMD
+      #{interpreter} -c 'source #{scr.shellescape} #{args.shelljoin}; env'
+    CMD
+  else                                 # POSIX‑compatible shell
+    <<~CMD
+      #{interpreter} -c '. #{scr.shellescape} #{args.shelljoin}; env -0'
+    CMD
+  end
+end
+
+def parse_dump(raw, nul: true)
+  env = {}
+  fields = nul ? raw.split("\0") : raw.lines.map(&:chomp)
+  fields.each do |kv|
+    k, v = kv.split("=", 2)
+    env[k] = v
+  end
+  env
+end
+
+# ---------- main ------------------------------------------------------------
+if ARGV.empty?
+  warn "Usage: import-env <script> [args...]"
+  exit 1
+end
+
+script, *script_args = ARGV
+abort "#{script}: no such file" unless File.exist?(script)
+interpreter = read_shebang(script)
+shell_name  = File.basename(interpreter)
+
+unless SUPPORTED_SHELLS.include?(shell_name)
+  warn "import-env: unsupported interpreter '#{shell_name}'. Supported shells: #{SUPPORTED_SHELLS.join(', ')}"
+  exit 2
+end
+
+start_env = ENV.to_h
+wrapper   = build_wrapper(interpreter, script, script_args)
+
+dump = IO.popen(wrapper, "rb", &:read)
+child_env =
+  if shell_name == "fish"
+    parse_dump(dump, nul: false)
+  else
+    parse_dump(dump, nul: true)
+  end
+
+# ---------- diff & print ----------------------------------------------------
+start_keys = start_env.keys
+child_keys = child_env.keys
+
+(child_keys - start_keys).each do |k|            # added
+  puts "export #{k}=#{quote(child_env[k])}"
+end
+
+(start_keys & child_keys).each do |k|            # changed
+  puts "export #{k}=#{quote(child_env[k])}" if start_env[k] != child_env[k]
+end
+
+(start_keys - child_keys).each do |k|            # removed
+  puts "unset #{k}"
+end
