@@ -1,0 +1,13 @@
+
+Create a test suite.
+It should check that the command works as expected in all supported shells.
+Make sure to handle cases such as:
+  - No changes to the env (check that everything stays the same)
+  - Added ENV vars
+  - Modified ENV vars (e.g. PATH)
+  - Deleted ENV vars
+
+The test suite should be executed with `just test`. Add a `Justfile` at the
+root of the repo.
+
+Create a GitHub CI action config for running the test suite on Ubuntu and macOS.
